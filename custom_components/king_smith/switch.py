@@ -93,7 +93,7 @@ class WalkingPadSwitch(WalkingPadEntity, SwitchEntity):
 
         await self._walking_pad_api.turn_off()
         self._on = False
-        self.async_write_ha_state()
+        self.coordinator.async_update_listeners()
 
     @property
     def unique_id(self) -> str:
