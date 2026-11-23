@@ -17,42 +17,35 @@ class WalkingPadEntity(CoordinatorEntity[WalkingPadCoordinator]):
     """Walking Pad Entity Base Class."""
 
     def __init__(
-        self, treadmillName: str, entityName: str, walking_pad_api: WalkingPadApi, coordinator
+        self,
+        treadmillName: str,
+        entityName: str,
+        walking_pad_api: WalkingPadApi,
+        coordinator: WalkingPadCoordinator,
     ) -> None:
         """Initialize the entity."""
         super().__init__(coordinator)
         self._coordinator = coordinator
         self._walking_pad_api = walking_pad_api
         self._treadmillName = treadmillName
-        self.entity_id = generate_entity_id(ENTITY_ID_FORMAT, f"{self._treadmillName} {entityName}", [])
+        self.entity_id = generate_entity_id(
+            ENTITY_ID_FORMAT, f"{self._treadmillName} {entityName}", []
+        )
 
     @callback
     def _handle_coordinator_update(self) -> None:
         self.async_write_ha_state()
 
-    async def async_update(self) -> None:
-        """Handle an update."""
-        await self._walking_pad_api.update_state()
-
     @property
     def device_info(self) -> dict[str, Any]:
         """Return the device info."""
-        prop = {
+        return {
             "identifiers": {(DOMAIN, self._walking_pad_api.mac)},
             "name": self._treadmillName,
             "manufacturer": "King Smith",
         }
 
-        return prop
-
-    @property
-    def should_poll(self):
-        """Should poll."""
-        return True
-
     @property
     def available(self) -> bool:
         """Return entity available state."""
-        if self._walking_pad_api is not None and self._walking_pad_api.connected:
-            return True
-        return False
+        return bool(self._walking_pad_api and self._walking_pad_api.connected)
