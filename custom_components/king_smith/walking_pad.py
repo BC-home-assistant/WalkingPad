@@ -6,7 +6,7 @@ import time
 from bleak.backends.device import BLEDevice
 from ph4_walkingpad.pad import Controller, WalkingPad, WalkingPadCurStatus
 
-STATUS_LOCK_ON_CMD_SECONDS = 1.0
+STATUS_LOCK_ON_CMD_SECONDS = 2.5
 STATUS_LOCK_ON_START_SECONDS = 3.8
 CMD_SETTLE_SECONDS = 0.15
 
@@ -53,7 +53,8 @@ class WalkingPadApi:
             return
 
         if time.monotonic() < self._status_lock_until:
-            if self._moving and status.speed > 0:
+            # Hef de lock meteen op zodra de band op de gevraagde doelsnelheid draait
+            if self._moving and status.speed > 0 and status.speed == self._speed:
                 self._status_lock_until = 0.0
             else:
                 return
