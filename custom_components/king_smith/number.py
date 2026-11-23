@@ -78,8 +78,9 @@ class WalkingPadSpeed(WalkingPadEntity, NumberEntity):
         return self._kph
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set the speed."""
+    """Set the speed."""
         await self._walking_pad_api.change_speed(int(value * 10))
+        self._kph = self._walking_pad_api.speed / 10
         self.schedule_update_ha_state()
 
     @property
