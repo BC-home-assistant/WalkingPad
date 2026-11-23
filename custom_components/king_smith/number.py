@@ -1,9 +1,7 @@
 """Walking Pad Number Entities."""
-from datetime import timedelta
-
 from homeassistant.components.number import (
-    NumberMode,
     NumberEntity,
+    NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfSpeed
@@ -15,11 +13,9 @@ from .coordinator import WalkingPadCoordinator
 from .entity import WalkingPadEntity
 from .walking_pad import WalkingPadApi
 
-
-SCAN_INTERVAL = timedelta(seconds=5)
 MIN_VALUE = 0.0
 MAX_VALUE = 6.0
-STEP = 0.1
+STEP = 0.5
 
 
 async def async_setup_entry(
@@ -54,8 +50,8 @@ class WalkingPadSpeed(WalkingPadEntity, NumberEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        self._kph = self._walking_pad_api.speed / 10
-        self.schedule_update_ha_state()
+        self._kph = self._walking_pad_api.speed / 10.0
+        self.async_write_ha_state()
 
     @property
     def native_min_value(self) -> float:
@@ -78,10 +74,10 @@ class WalkingPadSpeed(WalkingPadEntity, NumberEntity):
         return self._kph
 
     async def async_set_native_value(self, value: float) -> None:
-    """Set the speed."""
-        await self._walking_pad_api.change_speed(int(value * 10))
-        self._kph = self._walking_pad_api.speed / 10
-        self.schedule_update_ha_state()
+        """Set the speed."""
+        await self._walking_pad_api.change_speed(round(value * 10))
+        self._kph = self._walking_pad_api.speed / 10.0
+        self.async_write_ha_state()
 
     @property
     def unique_id(self) -> str:
@@ -89,6 +85,6 @@ class WalkingPadSpeed(WalkingPadEntity, NumberEntity):
         return f"{self._walking_pad_api.mac}_speed"
 
     @property
-    def name(self):
+    def name(self) -> str:
         """Name of the entity."""
         return "Speed"
