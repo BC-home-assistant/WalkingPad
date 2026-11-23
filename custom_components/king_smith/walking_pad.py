@@ -4,10 +4,11 @@ import logging
 import time
 
 from bleak.backends.device import BLEDevice
-
 from ph4_walkingpad.pad import Controller, WalkingPad, WalkingPadCurStatus
 
-STATUS_LOCK_ON_CMD_SECONDS = 5
+STATUS_LOCK_ON_CMD_SECONDS = 1.0
+STATUS_LOCK_ON_START_SECONDS = 3.8
+CMD_SETTLE_SECONDS = 0.15
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,8 +22,9 @@ class WalkingPadApi:
         self._ble_device = ble_device
         self._ctrl = Controller()
         self._callbacks = []
+        self._cmd_lock = asyncio.Lock()
         self._status_lock = False
-        self._last_cmd_time = time.time()
+        self._status_lock_until = 0.0
 
         self._connected = False
         self._moving = False
@@ -32,7 +34,7 @@ class WalkingPadApi:
         self._steps = 0
         self._step_cadence = 0
 
-        self._last_status = {}
+        self._last_status = None
         self._last_status_time = 0.0
 
         self._register_controller_callbacks()
@@ -40,23 +42,23 @@ class WalkingPadApi:
     def _register_controller_callbacks(self):
         self._ctrl.handler_cur_status = self._on_status_update
 
-    def _begin_cmd(self) -> asyncio.Lock:
-        self._status_lock = True
-        return asyncio.Lock()
-
-    async def _end_cmd(self):
-        await asyncio.sleep(0.75)
-        self._last_cmd_time = time.time()
+    async def _end_cmd(self, lock_seconds: float = STATUS_LOCK_ON_CMD_SECONDS):
+        await asyncio.sleep(CMD_SETTLE_SECONDS)
+        self._status_lock_until = time.monotonic() + lock_seconds
         self._status_lock = False
 
     def _on_status_update(self, sender, status: WalkingPadCurStatus) -> None:
         """Update current state."""
-        # Don't update if we're still running a command or just did (status from device is outdated at first)
-        if (
-            self._status_lock
-            or time.time() - self._last_cmd_time < STATUS_LOCK_ON_CMD_SECONDS
-        ):
+        if self._status_lock:
             return
+
+        if time.monotonic() < self._status_lock_until:
+            # Als we aan het opstarten zijn en de band draait al echt (speed > 0),
+            # hef de lock dan meteen op zodat sensoren direct updaten.
+            if self._moving and status.speed > 0:
+                self._status_lock_until = 0.0
+            else:
+                return
 
         self._moving = status.speed > 0
         self._speed = status.speed
@@ -64,23 +66,27 @@ class WalkingPadApi:
         self._time = status.time
         self._steps = status.steps
 
-        # only try to calculate cadence if we have all needed infos
-        if  self._moving and self._last_status_time > 0 and self._last_status.speed > 0 and self._last_status.time != status.time:
-            # calculate steps per minute
-            self._step_cadence = round((status.steps - self._last_status.steps) / float(float(status.time - self._last_status.time)/60.0), 2)
-            if self._step_cadence < 0:
-                self._step_cadence = 0
+        now = time.monotonic()
+        if (
+            self._moving
+            and self._last_status is not None
+            and self._last_status_time > 0
+            and self._last_status.speed > 0
+            and self._last_status.time != status.time
+        ):
+            time_diff = float(status.time - self._last_status.time) / 60.0
+            if time_diff > 0:
+                self._step_cadence = max(
+                    0, round((status.steps - self._last_status.steps) / time_diff, 2)
+                )
         else:
             self._step_cadence = 0
 
-        # store last status msg
-        self._last_status_time = time.time()
+        self._last_status_time = now
         self._last_status = status
 
-        if len(self._callbacks) > 0:
-            for callback in self._callbacks:
-                callback(status)
-
+        for callback in self._callbacks:
+            callback(status)
 
     def register_status_callback(self, callback) -> None:
         """Register a status callback."""
@@ -133,91 +139,99 @@ class WalkingPadApi:
 
     async def connect(self) -> None:
         """Connect the device."""
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.run(self._ble_device)
-            self._connected = True
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.run(self._ble_device)
+                self._connected = True
+            finally:
+                await self._end_cmd()
 
     async def disconnect(self) -> None:
         """Disconnect the device."""
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.disconnect()
-            self._connected = False
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.disconnect()
+                self._connected = False
+            finally:
+                await self._end_cmd()
 
     async def turn_on(self) -> None:
         """Turn on the device."""
-        if self.connected is not True:
+        if not self.connected:
             return
-
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.switch_mode(WalkingPad.MODE_MANUAL)
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.switch_mode(WalkingPad.MODE_MANUAL)
+            finally:
+                await self._end_cmd()
 
     async def turn_off(self) -> None:
         """Turn off the device."""
-        if self.connected is not True:
+        if not self.connected:
             return
-
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.switch_mode(WalkingPad.MODE_STANDBY)
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.switch_mode(WalkingPad.MODE_STANDBY)
+            finally:
+                await self._end_cmd()
 
     async def start_belt(self) -> None:
         """Start the belt."""
-        if self.connected is not True:
+        if not self.connected:
             return
-
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.start_belt()
-            self._moving = True
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.start_belt()
+                self._moving = True
+            finally:
+                await self._end_cmd(STATUS_LOCK_ON_START_SECONDS)
 
     async def stop_belt(self) -> None:
         """Stop the belt."""
-        if self.connected is not True:
+        if not self.connected:
             return
-
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.stop_belt()
-            self._moving = False
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.stop_belt()
+                self._moving = False
+            finally:
+                await self._end_cmd()
 
     async def change_speed(self, speed: int) -> None:
         """Change the speed."""
-
-        if self.connected is not True:
+        if not self.connected:
             return
-        lock = self._begin_cmd()
-        async with lock:
-            await self._ctrl.change_speed(speed)
-            self._speed = speed
-            await self._end_cmd()
+        async with self._cmd_lock:
+            self._status_lock = True
+            try:
+                await self._ctrl.change_speed(speed)
+                self._speed = speed
+            finally:
+                await self._end_cmd()
 
     async def update_state(self) -> None:
         """Update device state."""
-        if self.connected is not True:
+        if not self.connected:
             try:
                 await self.connect()
             except Exception as e:
-                _LOGGER.warn("failed to connect to Walking Pad: %s", e)
+                _LOGGER.warning("Failed to connect to Walking Pad: %s", e)
             return
 
-        # Grab the lock so we don't run while another command is running
-        lock = self._begin_cmd()
-        async with lock:
+        if self._cmd_lock.locked():
+            return
+
+        async with self._cmd_lock:
             try:
-                # Disable status lock so our update triggers a refresh
                 self._status_lock = False
                 await self._ctrl.ask_stats()
             except Exception as e:
-                _LOGGER.warn("failed to request status update from Walking Pad: %s", e)
+                _LOGGER.warning("Failed to request status update from Walking Pad: %s", e)
                 await self._ctrl.disconnect()
                 self._connected = False
-                # Skip callback so we don't reset debouncer
