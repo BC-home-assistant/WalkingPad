@@ -1,11 +1,7 @@
 """Walking Pad Switch Entities."""
 import logging
 
-from datetime import timedelta
-
-from homeassistant.components.switch import (
-    SwitchEntity,
-)
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
@@ -17,8 +13,6 @@ from .entity import WalkingPadEntity
 from .walking_pad import WalkingPadApi
 
 _LOGGER = logging.getLogger(__name__)
-
-SCAN_INTERVAL = timedelta(seconds=10)
 
 
 async def async_setup_entry(
@@ -57,7 +51,7 @@ class WalkingPadSwitch(WalkingPadEntity, SwitchEntity):
             "Updating walking pad belt switch entity: %s", self._walking_pad_api.moving
         )
         self._on = self._walking_pad_api.moving
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle the entity being added to hass."""
@@ -65,33 +59,41 @@ class WalkingPadSwitch(WalkingPadEntity, SwitchEntity):
         try:
             await self._walking_pad_api.connect()
         except Exception as e:
-            _LOGGER.warn("failed to connect to Walking Pad: %s", e)
+            _LOGGER.warning("Failed to connect to Walking Pad: %s", e)
 
     async def async_will_remove_from_hass(self) -> None:
         """Handle the entity being removed from hass."""
         await self._walking_pad_api.disconnect()
-        return await super().async_will_remove_from_hass()
+        await super().async_will_remove_from_hass()
 
     @property
-    def is_on(self):
-        """Whether or not the switch is currrently on."""
+    def is_on(self) -> bool:
+        """Whether or not the switch is currently on."""
         return self._on
 
-    async def async_turn_on(self):
+    async def async_turn_on(self, **kwargs) -> None:
         """Turn On."""
+        if not self._walking_pad_api.connected:
+            await self._walking_pad_api.connect()
+
         self._on = True
         await self._walking_pad_api.turn_on()
         await self._walking_pad_api.start_belt()
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
-    async def async_turn_off(self):
+    async def async_turn_off(self, **kwargs) -> None:
         """Turn Off."""
+        if not self._walking_pad_api.connected:
+            self._on = False
+            self.async_write_ha_state()
+            return
+
         if self._walking_pad_api.moving:
             await self._walking_pad_api.stop_belt()
 
         await self._walking_pad_api.turn_off()
         self._on = False
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
     @property
     def unique_id(self) -> str:
