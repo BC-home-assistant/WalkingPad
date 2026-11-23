@@ -53,8 +53,6 @@ class WalkingPadApi:
             return
 
         if time.monotonic() < self._status_lock_until:
-            # Als we aan het opstarten zijn en de band draait al echt (speed > 0),
-            # hef de lock dan meteen op zodat sensoren direct updaten.
             if self._moving and status.speed > 0:
                 self._status_lock_until = 0.0
             else:
@@ -176,6 +174,9 @@ class WalkingPadApi:
             self._status_lock = True
             try:
                 await self._ctrl.switch_mode(WalkingPad.MODE_STANDBY)
+                self._moving = False
+                self._speed = 0
+                self._step_cadence = 0
             finally:
                 await self._end_cmd()
 
@@ -200,6 +201,8 @@ class WalkingPadApi:
             try:
                 await self._ctrl.stop_belt()
                 self._moving = False
+                self._speed = 0
+                self._step_cadence = 0
             finally:
                 await self._end_cmd()
 
